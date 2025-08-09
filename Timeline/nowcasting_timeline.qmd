@@ -1,0 +1,78 @@
+---
+title: "GSP Nowcasting — Timeline & Weekly Updates"
+subtitle: "All states • Post‑COVID focus • ABS‑only • R stack"
+author: "Prepared for weekly mentor updates"
+date: "2025-08-09"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: callout-note
+**Weekly check‑ins:** Tuesdays at **1:30 PM (Australia/Melbourne)**.\
+Use this page for quick status + attachments.
+:::
+
+## Timeline Overview
+
+Below is the current **Aug–Oct 2025** plan.
+
+### Gantt
+
+![](gantt_nowcast_aug-oct-2025.png){width="100%"}
+
+### Task Table
+
+```{r}
+#| label: tasks-table
+#| tbl-cap: "Nowcasting tasks (Aug–Oct 2025)"
+library(readr)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+
+tasks <- read_csv("gsp_nowcasting_tasks_aug-oct_2025.csv", show_col_types = FALSE) |>
+  mutate(
+    Start = as.Date(Start),
+    End = as.Date(End)
+  )
+
+knitr::kable(tasks, align = "lccr")
+```
+
+```{r}
+#| label: "Gantt chart"
+#| tbl-cap: "Nowcasting tasks (Aug–Oct 2025)"
+gantt <- ggplot(tasks, aes(x = Start, xend = End, y = Task, yend = Task)) +
+  geom_segment(linewidth = 8, color = "#4C72B0") +
+  labs(
+    title = "GSP Nowcasting Project — Gantt Chart (Aug–Oct 2025)",
+    x = "Date",
+    y = "Phases"
+  ) +
+  scale_x_date(date_breaks = "1 week", date_labels = "%d %b") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+
+## Status Notes (fill each week)
+
+## Deliverables & Links
+
+-   Reporting targets:
+
+**Week 1: Project timeline and Project brief** Week : Quarto report + (optional) Shiny app in Phase 7.
+
+## Change Log
+
+-   **2025-08-09** — Initial draft generated from agreed timeline.
