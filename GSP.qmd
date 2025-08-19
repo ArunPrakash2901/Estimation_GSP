@@ -1,0 +1,44 @@
+---
+title: "Data sourcing"
+author: "Arun Krishnasamy"
+format: html
+---
+
+```{r}
+Sys.setenv(R_READABS_PATH = "D:/GSP/data")
+```
+
+```{r}
+library(readabs)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+capex <- read_abs("5625.0")
+
+```
+
+```{r}
+capex_s <- capex |> group_by(series, series_id) |> 
+  filter(series_type == "Seasonally Adjusted") |>
+  #filter(series_type == "Original") |>
+  select(series, series_id, unit, series_type, frequency
+         ) |> 
+  unique()
+capex_s
+```
+
+```{r}
+unique(c(lf_s$series, lf_s$series_id))
+```
+
+```{r}
+
+```
+
+
+```{r}
+unique(c(rt$table_no, rt$table_title, rt$series_id))
+```
+
