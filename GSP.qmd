@@ -15,26 +15,29 @@ library(ggplot2)
 ```
 
 ```{r}
-capex <- read_abs("5625.0")
+jv<- read_abs("6354.0")
 
 ```
 
 ```{r}
-capex_s <- capex |> group_by(series, series_id) |> 
-  filter(series_type == "Seasonally Adjusted") |>
-  #filter(series_type == "Original") |>
-  select(series, series_id, unit, series_type, frequency
+jv_s <- jv |> group_by(series, series_id) |> 
+  #filter(series_type == "Seasonally Adjusted") |>
+  filter(series_type == "Original") |>
+  #filter(frequency == "Quarterly")
+  select(series, series_id#, unit, series_type, frequency
          ) |> 
   unique()
-capex_s
+jv_s
 ```
 
 ```{r}
-unique(c(lf_s$series, lf_s$series_id))
+series <- unique(c(jv$series
+                   #, itgs_s$series_id)
+                   ))
 ```
 
 ```{r}
-
+series
 ```
 
 
