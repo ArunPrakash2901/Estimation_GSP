@@ -80,10 +80,14 @@ monthly_to_quarterly <- function(df) {
     )
 }
 
+quarter_end_date <- function(x) {
+  as.Date(yearquarter(x), year_start = 1) + months(3) - days(1)
+}
+
 combine_and_coerce_quarterly <- function(df) {
   # Split monthly vs non-monthly, aggregate monthly to Q, then recombine
   monthly_q <- monthly_to_quarterly(df)
-  non_m <- df |> filter(freq != "M") |> mutate(date = as.Date(yearquarter(date)))
+  non_m <- df |> filter(freq != "M") |> mutate(date = quarter_end_date(date))
   bind_rows(non_m, monthly_q) |>
     arrange(source, group, state, alias, date)
 }
