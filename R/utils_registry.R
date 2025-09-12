@@ -17,5 +17,9 @@ read_registry <- function(path = "data/schema.csv") {
       alias    = dplyr::coalesce(alias, series_id, rba_series, rba_series_id),
       transform = ifelse(is.na(transform) | transform == "", "level", transform)
     )
+  # checks
+  need <- c("source","group","state","freq","transform","alias")
+  miss <- setdiff(need, names(reg))
+  if (length(miss)) stop("Schema missing columns: ", paste(miss, collapse=", "))
   reg
 }
