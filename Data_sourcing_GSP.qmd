@@ -1,0 +1,95 @@
+---
+title: "Data sourcing"
+author: "Arun Krishnasamy"
+format: html
+---
+
+We load the essential libraries:
+```{r Libraries}
+library(readabs)
+library(readrba)
+library(dplyr)
+library(ggplot2)
+```
+
+## Data
+
+We need data series from both ABS(Australian Bureau of Statistics) and RBA(Reserve Bank of Australia), so having separate approach would be wise.
+
+### ABS
+Starting with a draft schema for ABS(available in the data folder), We subjectively selected the necessary series from the previous methodology available.  Once decided about the series needed we can use the (dataflow)[https://data.api.abs.gov.au/rest/dataflow] an API service provided by ABS, to gather the catalog number.
+
+
+However, to understand the landscape of the data and to know what specific series are present in the underlying catalog. The `readabs` library comes in handy for this, where one can use the catalog number or the series ID itself to pull the data from ABS.
+
+
+So I used the below workflow:
+
+***1. Pull the whole catalog of data with all the relevant series in it.***
+***2. Check for SA(Seasonally adjusted) estimates***
+***3. Look at the unique series ID and make the final decision of choosing the equired series.***
+***4. Get the information into the `schema_draft.csv`***
+
+The relevant code as below:
+```{r, eval=FALSE}
+#Example: Job Vacancies
+jv<- read_abs("6354.0")
+
+jv_s <- jv |> group_by(series, series_id) |> 
+  #filter(series_type == "Seasonally Adjusted") |>
+  filter(series_type == "Original") |>
+  #filter(frequency == "Quarterly")
+  select(series, series_id#, unit, series_type, frequency
+         ) |> 
+  unique()
+jv_s
+```
+
+```{r Unique series, eval=FALSE}
+series <- unique(c(jv$series
+                   #, itgs_s$series_id)
+                   ))
+```
+
+### RBA
+
+The same workflow was used, except for the unavailability of API data flows for RBA series. Although, due to its small database, manual work of selecting the table number by sifting the website was not big of a issue.
+
+Once I was satisfied with the selection of table number, I started pulling the data by using the `readrba` library.
+
+```{r, Pull RBA series}
+f1_1 <- read_rba("f1.1")
+f2 <- read_rba("f2")
+d2 <- read_rba("d2")
+g1 <- read_rba("g1")
+```
+
+Later I combined whole data, and created a list of `needed_series` to filter the other series out.
+```{r Combine}
+rba_df <- bind_rows(f1_1, f2, d2, g1)
+```
+
+```{r}
+needed_series <- c(
+  "Cash Rate Target",
+  "Australian Government 2 year bond",
+  "Australian Government 10 year bond",
+  "Credit; Business; Seasonally adjusted",
+  "Credit; Owner-occupier housing; Seasonally adjusted",
+  "Credit; Investor housing; Seasonally adjusted",
+  "Credit; Total; Seasonally adjusted",
+  "Consumer price index",
+  "Quarterly trimmed mean inflation",
+  "Quarterly weighted median inflation"
+)
+
+filtered_rba <- rba_df |>
+  filter(series %in% needed_series) |> 
+  group_by(series_id, series) |> 
+  select(series, series_id, series_type, frequency, source, units, table_title) |> 
+  unique()
+```
+
+
+With all this necessary series from both ABS and RBA, I stated to create the registry. The idea was that have each observation of series ID in its own row, so that it can later be used to parse through and gather all the data.
+

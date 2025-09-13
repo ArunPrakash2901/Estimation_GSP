@@ -37,7 +37,6 @@ fetch_abs_by_registry <- function(reg) {
             unit         = unit,            # was series_unit (does not exist)
             sa_flag      = series_type,     # was seasonal_adjustment
             frequency    = frequency,
-            data_type    = data_type,
             collection_month = collection_month,
             table_no     = table_no,
             table_title  = table_title,
@@ -67,7 +66,7 @@ fetch_abs_by_registry <- function(reg) {
   out
 }
 
-find_bad_ids <- function(reg, abs_raw) {
+find_bad_abs_ids <- function(reg, abs_raw) {
   requested <- reg |> dplyr::filter(source == "ABS", !is.na(series_id), series_id != "") |> dplyr::pull(series_id) |> unique()
   got       <- abs_raw |> dplyr::pull(series_id) |> unique()
   setdiff(requested, got)
