@@ -1,0 +1,13 @@
+name|type|data|command|depend|seed|path|time|size|bytes|format|repository|iteration|parent|children|seconds|warnings|error
+registry_file|stem|880b11e220de4e2a|5d32c236b68607d2|2c530c1562a7fbd1|-1435102659|data/schema.csv|t20343.2374101358s|s23214b|23214|file|local|vector|||0.41||
+series_registry|stem|49a93cdc226715f3|752ca62c321bec69|53f284fb497d74ec|-977911622||t20352.0945759014s|s4451b|4451|rds|local|vector|||0.44||
+p12_rba_raw|stem|004c67e985725065|82b2a0ceb1df4e07|d0c3d7582a0efaf0|-1810836695||t20352.0970844085s|s105738b|105738|rds|local|vector|||216.62|All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.. All formats failed to parse. No formats found.|
+p11_abs_raw|stem|f85b7b207a81d263|7780bc17735b9d6b|34eaf929f2aafcb9|-394778391||t20352.0989896931s|s219569b|219569|rds|local|vector|||164.5||
+read_registry|function|84e43a7d8dcf4181
+find_bad_rba_ids|function|9432ddadfe29051e
+.Random.seed|object|00a60b5f13b52ef5
+fetch_rba_by_registry|function|631087fa467440b3
+fetch_abs_by_registry|function|6886b76fba9522b0
+get_col|function|5015e5abb6a1aa4a
+find_bad_abs_ids|function|eb4c72aee317c6f0
+p1_abs_rba_raw|stem|f30737a97491f225|b4d86db2dcf1eb89|1d2183d5b14859f8|-1536423725||t20352.1187281844s|s400946b|400946|rds|local|vector|||0.02||
