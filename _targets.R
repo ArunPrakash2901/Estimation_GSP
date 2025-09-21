@@ -27,6 +27,16 @@ list(
   tar_target(
     p1_abs_rba_raw, 
     bind_rows(p11_abs_raw, p12_rba_raw) |> 
-               arrange(date, series_id)
+    select(-"collection_month", -"table_no", -"sheet_no", -"pub_date") |> 
+    arrange(date, series_id) |> 
+    # ensure consistency
+    mutate(
+      frequency = recode(frequency,
+                         "Quarter" = "Quarterly",
+                         "Month"   = "Monthly"),
+      sa_flag   = str_replace(sa_flag, "Seasonally adjusted", "Seasonally Adjusted")
     )
+  )
+  # Phase 2: Data preparation
+  
 )
