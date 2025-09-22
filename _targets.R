@@ -9,7 +9,7 @@ tar_option_set(packages = c(
 source("R/utils_registry.R")
 source("R/utils_fetch_abs.R")
 source("R/utils_fetch_rba.R")
-#source("R/utils_clean_transform.R")
+source("R/utils_clean.R")
 
 list(
   # Phase 0: Registry
@@ -26,17 +26,8 @@ list(
   # Combine both ABS and RBA data object
   tar_target(
     p1_abs_rba_raw, 
-    bind_rows(p11_abs_raw, p12_rba_raw) |> 
-    select(-"collection_month", -"table_no", -"sheet_no", -"pub_date") |> 
-    arrange(date, series_id) |> 
-    # ensure consistency
-    mutate(
-      frequency = recode(frequency,
-                         "Quarter" = "Quarterly",
-                         "Month"   = "Monthly"),
-      sa_flag   = str_replace(sa_flag, "Seasonally adjusted", "Seasonally Adjusted")
-    )
-  )
+    bind_rows(p11_abs_raw, p12_rba_raw) 
+  ),
   # Phase 2: Data preparation
-  
+  tar_target(p21_raw, prep_step1(p1_abs_rba_raw))
 )
