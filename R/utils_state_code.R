@@ -106,7 +106,7 @@ add_state_code <- function(df,
   state_fin <- dplyr::coalesce(tmp$`.__state_rec__`, tmp$`.__state_inf__`)
   state_fin <- ifelse(state_fin %in% .STATE_LEVELS, state_fin, NA_character_)
   
-  tmp[[out_col]] <- state_fin
+  tmp[[out_col]] <- dplyr::coalesce(state_fin, "AUS")
   
   if (!keep_internals) {
     tmp$`.__state_rec__` <- NULL
