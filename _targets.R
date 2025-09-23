@@ -10,6 +10,7 @@ source("R/utils_registry.R")
 source("R/utils_fetch_abs.R")
 source("R/utils_fetch_rba.R")
 source("R/utils_clean.R")
+source("R/quarterizing.R")
 
 list(
   # Phase 0: Registry
@@ -29,5 +30,18 @@ list(
     bind_rows(p11_abs_raw, p12_rba_raw) 
   ),
   # Phase 2: Data preparation
-  tar_target(p21_raw, prep_step1(p1_abs_rba_raw))
+  tar_target(p21_raw, prep_step1(p1_abs_rba_raw)),
+  # Phase 2.1: Rules from registry
+  tar_target(
+    p21_rules,
+    series_registry |>
+      dplyr::transmute(series_id, rule = tolower(trimws(agg_rule)))
+  ),
+  tarchetypes::tar_file(
+    p21_raw_rds,
+    {
+      saveRDS(p21_raw, "data/p21_raw.rds")
+      "data/p21_raw.rds"
+    }
+  )
 )
