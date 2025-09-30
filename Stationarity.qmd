@@ -1,0 +1,435 @@
+---
+title: "Stationarity"
+author: "Arun Krishanasmy"
+format: html
+editor: visual
+---
+
+This document walks through the workflow to acheive stationarity in series:
+
+1. Scan each series’ ACF and suggest differencing rules;
+
+2. Apply those rules (SA-aware, with optional logs); and
+
+3. Verify stationarity (ADF/KPSS) and flag issues (still non-stationary or over-differenced).
+
+# Setup
+
+Load the packages once and define paths/constants up front. We also pre-create the output directory to avoid “folder not found” errors.
+
+```{r Libraries and directory settings}
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tsibble)
+  library(tidyr)
+  library(tibble)
+  library(purrr)
+  library(stringr)
+  library(tseries)
+})
+
+# Paths & constants
+PATH_IN   <- "data/q_panel.csv"                 # source quarterly panel (values are already quarterly)
+PATH_OUT  <- "data/stationarity/stationarity_from_acf.csv"   # ACF-based recommendations data
+PATH_PANEL  <- "data/q_panel.csv"
+PATH_RECS   <- "data/stationarity/stationarity_from_acf.csv"
+PATH_SCHEMA <- "data/schema.csv"                # contains 'sa_flag'
+OUT_PANEL   <- "data/stationarity/q_panel_stationary.csv"    # transformed (stationary) panel
+OUT_CHECK   <- "data/stationarity/stationarity_check_after.csv"
+
+LAG_MAX      <- 12          # quarterly: capture up to 3 years of lags
+DEFAULT_STATE <- "AUS"      # fallback if state missing
+
+# Ensure output folders exist
+#dir.create(dirname(PATH_OUT),   showWarnings = FALSE, recursive = TRUE)
+#dir.create(dirname(OUT_PANEL),  showWarnings = FALSE, recursive = TRUE)
+#dir.create(dirname(OUT_CHECK),  showWarnings = FALSE, recursive = TRUE)
+
+```
+
+# Diagnostics through ACF for differencing
+
+Our goal here in this section is, For each series/state, compute short-lag ACF features to infer simple, conservative differencing rules. 
+
+For that, we make sure there is a proper quarterly index, value column, and a unique `series_key`. This allows us to load & normalize the panel (tsibble-friendly keys).
+
+```{r, Data pre-processing}
+df <- readr::read_csv(PATH_IN, show_col_types = FALSE)
+
+# Normalise value column name
+if ("value_q" %in% names(df) && !"value" %in% names(df)) {
+  df <- dplyr::rename(df, value = value_q)
+}
+
+# Build/normalise quarterly index
+if (!"quarter" %in% names(df)) {
+  if ("qtr_end" %in% names(df)) {
+    df <- dplyr::mutate(df, quarter = tsibble::yearquarter(qtr_end))
+  } else if ("q" %in% names(df)) {
+    df <- dplyr::mutate(df, quarter = tsibble::yearquarter(q))
+  } else {
+    stop("Need 'qtr_end' or 'q'.")
+  }
+} else if (!inherits(df$quarter, "yearquarter")) {
+  df <- dplyr::mutate(df, quarter = tsibble::yearquarter(quarter))
+}
+
+# Sanity checks + default state
+if (!"series_id" %in% names(df)) stop("Missing series_id")
+if (!"value" %in% names(df))     stop("Missing value/value_q")
+if (!"state" %in% names(df))     df <- dplyr::mutate(df, state = DEFAULT_STATE)
+
+df <- df |>
+  mutate(state = ifelse(is.na(state) | state == "", DEFAULT_STATE, state)) |>
+  arrange(series_id, state, quarter) |>
+  mutate(series_key = paste(series_id, state, sep = " :: "))
+
+```
+
+Once we have our processed data, we can carry out the process of computing acf estimates for our series.
+We wrap `acf()` with NA handling and a stable length (1..K).
+
+```{r}
+# Helper: safe ACF vector (lags 1..K)
+safe_acf_vec <- function(x, k = LAG_MAX) {
+  x <- as.numeric(x)
+  a <- tryCatch(
+    stats::acf(x, plot = FALSE, lag.max = max(1, min(k, length(x) - 1)),
+               na.action = stats::na.contiguous),
+    error = function(e) NULL
+  )
+  if (is.null(a) || length(a$acf) <= 1) return(rep(NA_real_, k))
+  acf1k <- as.numeric(a$acf[-1])  # drop lag 0
+  if (length(acf1k) < k) acf1k <- c(acf1k, rep(NA_real_, k - length(acf1k)))
+  acf1k
+}
+
+```
+
+One cannot look into acf plot for ~100 predictors separately to make decisions, so I computed acf for all the predictors into a registry, this allows me to track how each series are being treated. But again to make it simple two variable were created with respect to the acf estimtes:
+
+- `trend_score` averages ACF at lags 1–6 (trend-ish).
+- `seasonal_score` averages ACF at lags 4, 8, 12 (quarterly seasonality).
+
+```{r Feature engineering;ACF}
+# Effective length per series (after missing removal when computing ACF)
+len_tbl <- df |>
+  group_by(series_key, series_id, state) |>
+  summarise(n_eff = sum(!is.na(value)), .groups = "drop")
+
+# ACF features (unnest into acf1..acfK)
+acf_tbl <- df |>
+  group_by(series_key) |>
+  summarise(acf = list(safe_acf_vec(value, LAG_MAX)), .groups = "drop") |>
+  mutate(acf = map(acf, ~ set_names(.x, paste0("acf", 1:LAG_MAX)))) |>
+  unnest_wider(acf)
+
+feat <- len_tbl |>
+  left_join(acf_tbl, by = "series_key") |>
+  mutate(
+    seasonal_score    = rowMeans(cbind(acf4, acf8, acf12), na.rm = TRUE),
+    persistence_score = rowMeans(cbind(acf1, acf2, acf3, acf4, acf5, acf6), na.rm = TRUE)
+  )
+
+```
+
+Rules I followed are as below:
+
+- Strong seasonality: `D=1` `(m=4)`
+
+- Strong trend/persistence: `d=1`
+
+- Both: `D=1` `(m=4)` `then d=1`;
+
+- Too short(few observations): too_short; else: likely stationary.
+
+```{r}
+suggest_rec <- function(acf1, seasonal_score, n_eff) {
+  if (is.na(n_eff) || n_eff < 8) return("too_short")
+  s_ok <- !is.na(seasonal_score) && seasonal_score >= 0.35   # seasonal band
+  t_ok <- !is.na(acf1) && acf1 >= 0.7                        # strong persistence at lag 1
+  if (s_ok && t_ok) return("D=1 (m=4) then d=1")
+  if (s_ok)          return("D=1 (m=4)")
+  if (t_ok)          return("d=1")
+  "likely stationary"
+}
+
+feat <- feat |>
+  mutate(rec = pmap_chr(list(acf1, seasonal_score, n_eff), ~ suggest_rec(..1, ..2, ..3)))
+
+readr::write_csv(feat, PATH_OUT)
+message("Wrote: ", PATH_OUT)
+
+# Quick counts by recommendation
+print(feat |> count(rec, sort = TRUE))
+
+```
+
+# Transform per rules and verify stationarity
+
+The above workflow provides us with rich information on the nature of stationarity application on each series.
+Now in this part our main goals are, join the ACF-based rec to the panel, apply logs/differences, and re-test (ADF/KPSS)
+
+We use the `schema.csv`, which has the column `sa_flag`. This is done to respect seasonal adjustment: drop seasonal differencing for SA series (keep `d=1` if needed)
+
+Let's load the panel and recommendations and build keys:
+
+```{r}
+# Load panel
+panel <- readr::read_csv(PATH_PANEL, show_col_types = FALSE)
+
+# Build quarterly index (prefer qtr_end; fallback to q)
+if ("qtr_end" %in% names(panel)) {
+  panel$quarter <- tsibble::yearquarter(panel$qtr_end)
+} else if ("q" %in% names(panel)) {
+  panel$quarter <- tsibble::yearquarter(panel$q)
+} else {
+  stop("Need either 'qtr_end' (Date) or 'q' ('YYYY Q#') to form a quarterly index.")
+}
+
+# Decide value column
+vcol <- if ("value_q" %in% names(panel)) {
+  "value_q"
+} else if ("value" %in% names(panel)) {
+  "value"
+} else {
+  stop("No value column found. Expected 'value_q' or 'value'.")
+}
+
+# Keys & order
+panel <- panel |>
+  mutate(
+    state = if_else(is.na(state) | state == "", DEFAULT_STATE, state),
+    series_key = paste(series_id, state, sep = " :: ")
+  ) |>
+  arrange(series_key, quarter)
+
+# Load recs and ensure 'rec' column exists
+recs <- readr::read_csv(PATH_RECS, show_col_types = FALSE) |>
+  mutate(series_key = paste(series_id, state, sep = " :: "))
+
+if (!"rec" %in% names(recs)) {
+  alt <- intersect(names(recs), c("recommend","recommendation","rec_used","suggestion","rule"))
+  if (length(alt) == 1) {
+    recs <- recs |> rename(rec = !!alt)
+  } else {
+    stop("The recommendations file doesn't have 'rec'. Columns are: ",
+         paste(names(recs), collapse = ", "))
+  }
+}
+recs <- recs |> mutate(rec = as.character(rec))
+
+```
+
+We’ll drop D=1 only for SA series (leave d=1 intact)
+
+```{r}
+schema_flag <- readr::read_csv(PATH_SCHEMA, show_col_types = FALSE) |>
+  select(series_id, sa_flag) |>
+  mutate(
+    SA_flag = case_when(
+      str_to_lower(sa_flag) == "sa"       ~ TRUE,   # Seasonally Adjusted
+      str_to_lower(sa_flag) == "original" ~ FALSE,  # Not SA
+      str_to_lower(sa_flag) == "nil"      ~ NA,     # unknown/missing
+      is.na(sa_flag)                      ~ NA,
+      TRUE                                ~ NA
+    )
+  ) |>
+  select(series_id, SA_flag) |>
+  distinct()
+
+# Attach SA flag
+panel <- panel |> left_join(schema_flag, by = "series_id")
+recs  <- recs  |> left_join(schema_flag, by = "series_id")
+
+
+drop_D_only_vec <- function(x) {
+  x <- as.character(x)
+  x <- stringr::str_replace_all(x, stringr::fixed(" (m=4)"), "")  # remove literal suffix
+  x <- stringr::str_squish(x)
+
+  out <- x
+  mask_Then <- !is.na(x) & x == "D=1 then d=1"
+  mask_D    <- !is.na(x) & x == "D=1"
+
+  out[mask_Then] <- "d=1"
+  out[mask_D]    <- "likely stationary"
+  out
+}
+
+recs <- recs |>
+  mutate(
+    rec_original = rec,
+    rec = ifelse(SA_flag %in% TRUE, drop_D_only_vec(rec), rec)
+  )
+
+message(
+  "SA_flag==TRUE & had seasonal diff originally: ",
+  sum((recs$SA_flag %in% TRUE) & stringr::str_detect(recs$rec_original, stringr::fixed("D=1")), na.rm = TRUE)
+)
+
+```
+
+Lets use all the above for developing our stationarity logic as below:
+
+```{r}
+needs_log <- function(x) {
+  all(x > 0, na.rm = TRUE) &&
+    (max(x, na.rm = TRUE) / pmax(1, min(x, na.rm = TRUE)) > 1.5)
+}
+
+transform_one <- function(df1, vcol) {
+  rec_here <- df1$rec[1]
+  v  <- df1[[vcol]]
+  lg <- needs_log(v)
+  if (lg) v <- log(v)
+
+  # Apply seasonal then regular differencing if asked
+  if (!is.na(rec_here) && str_detect(rec_here, stringr::fixed("D=1"))) v <- v - dplyr::lag(v, 4)
+  if (!is.na(rec_here) && str_detect(rec_here, stringr::fixed("d=1"))) v <- v - dplyr::lag(v, 1)
+
+  df1$y        <- v
+  df1$log_used <- lg
+  df1$rec_used <- rec_here
+  df1
+}
+
+panel2 <- panel |>
+  left_join(recs |> select(series_key, rec), by = "series_key") |>
+  filter(!is.na(rec), !rec %in% c("too_short")) |>
+  group_by(series_key) |>
+  group_modify(~ transform_one(.x, vcol)) |>
+  ungroup()
+
+```
+
+The above code  does this below:
+- `log` if strictly positive with noticeable scale spread (heuristic).
+- Apply `D=1 (lag 4)` and/or `d=1 (lag 1)` depending on rec.
+
+
+# Re-check stationarity (ADF/KPSS) and flag concerns
+
+A formal hypothesis test are conducted, namely ADF and KPSS tests as below:
+
+```{r}
+safe_adf_p <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(stats::na.omit(x)) < 12) return(NA_real_)
+  suppressWarnings(tseries::adf.test(stats::na.omit(x), k = 3)$p.value)
+}
+safe_kpss_p <- function(x) {
+  x <- x[is.finite(x)]
+  if (length(stats::na.omit(x)) < 12) return(NA_real_)
+  suppressWarnings(kpss.test(stats::na.omit(x), null = "Level")$p.value)
+}
+
+check <- panel2 |>
+  group_by(series_key, series_id, state, rec_used, log_used) |>
+  summarise(
+    n      = sum(!is.na(y)),
+    adf_p  = safe_adf_p(y),
+    kpss_p = safe_kpss_p(y),
+    acf1   = { z <- y; z <- z[!is.na(z)];
+               if (length(z) > 4) as.numeric(stats::acf(z, plot = FALSE, lag.max = 1)$acf[2]) else NA_real_ },
+    .groups = "drop"
+  ) |>
+  mutate(
+    still_nonstat   = (adf_p > 0.10 | is.na(adf_p)) | (kpss_p < 0.10 & !is.na(kpss_p)),
+    overdifferenced = !is.na(acf1) & acf1 < -0.4
+  )
+
+```
+
+- still_nonstat if ADF fails to reject (p > 0.10) or KPSS rejects (p < 0.10).
+
+- over-differenced if ACF at lag 1 is strongly negative (< −0.4).
+
+
+# Outputs
+
+```{r}
+# Save transformed panel
+readr::write_csv(
+  panel2 |> select(series_id, state, quarter, all_of(vcol), y, rec_used, log_used),
+  OUT_PANEL
+)
+
+# Save checks
+readr::write_csv(check, OUT_CHECK)
+
+# Console glance
+print(count(check, still_nonstat))
+print(count(check, overdifferenced))
+cat("Wrote stationary panel to: ", OUT_PANEL,  "\n", sep = "")
+cat("Wrote post-transform stationarity check to: ", OUT_CHECK, "\n", sep = "")
+
+```
+
+- `OUT_PANEL` has the original value, transformed y, and flags.
+- `OUT_CHECK` has per-series diagnostics to quickly scan problems.
+
+There are 29 series with `still_nonstat` being true, lets maginify on this:
+
+```{r}
+check |> filter(still_nonstat == "TRUE") |> print(n=30)
+```
+
+We can observe two groups in this:
+
+- “likely stationary” but flagged (~7 series):
+    These have `rec_used == "likely stationary"` yet show high ADF p(fails to reject unit root) and very low KPSS p (rejects level-stationarity). In plain terms, they still look trend-nonstationary and need at least a `d=1` step.
+    
+- `d=1` applied but still flagged (~22 series): Many of these have ADF p ~ 0.01 (good) but KPSS p ~ 0.01 (bad). Maybe, leftover seasonal unit root present, so add `D=1 (m=4)` (but only if the series is not SA)
+
+```{r}
+bad <- check |> dplyr::filter(still_nonstat)
+
+bad_A_likely <- bad |> dplyr::filter(rec_used == "likely stationary")
+bad_B_d1     <- bad |> dplyr::filter(rec_used == "d=1")
+
+dplyr::tibble(
+  bucket = c("Group A: likely stationary", "Group B: d=1"),
+  n      = c(nrow(bad_A_likely), nrow(bad_B_d1))
+)
+
+```
+
+```{r}
+# join SA_flag for the 29
+bad_sa <- bad |>
+  dplyr::left_join(schema_flag, by = "series_id") |>
+  dplyr::select(series_key, series_id, state, rec_used, log_used, n, adf_p, kpss_p, acf1, SA_flag)
+
+# compute ACF at lag-4 on 'y' to see remaining seasonal correlation
+acf4_on_y <- panel2 |>
+  dplyr::semi_join(bad, by = c("series_key","series_id","state")) |>
+  dplyr::group_by(series_key, series_id, state) |>
+  dplyr::summarise(
+    acf4_y = {
+      z <- y; z <- z[is.finite(z)]
+      if (length(z) > 8) as.numeric(stats::acf(z, plot = FALSE, lag.max = 4)$acf[5]) else NA_real_
+    },
+    .groups = "drop"
+  )
+
+bad_aug <- bad_sa |>
+  dplyr::left_join(acf4_on_y, by = c("series_key","series_id","state"))
+
+# where seasonal differencing is plausible (Original data + sizable acf4 on y)
+cand_D1 <- bad_aug |>
+  # if acf4_y ≥ 0.30 and SA_flag != TRUE, try adding D=1.
+  dplyr::filter(isFALSE(SA_flag) | is.na(SA_flag)) |>
+  dplyr::filter(!is.na(acf4_y) & acf4_y >= 0.30)
+
+cand_D1 |> dplyr::arrange(dplyr::desc(acf4_y))
+cand_D1
+```
+
+The condition, if acf4_y ≥ 0.30 and SA_flag != TRUE, gives out no series, so there is no need for Seasonal differencing `D=1 (m=4)`
+
+
+
+
+
