@@ -114,6 +114,9 @@ The models have not yet produced a stable or reliable posterior. The main diffic
 - a practical roadmap for progress—building model complexity in stages (fixed-volatility VAR > Stochastiv Volatility > mixed-frequency), refining and structuring priors, reducing dimensionality before scaling up, and adding formal coherence and backtesting checks. 
 
 Together, these steps aim to turn the current foundation into a working, credible nowcasting framework.
+
+Everything that is being implemented lives in this [Repo](https://github.com/ArunPrakash2901/Estimation_GSP)
+
 \newpage
 
 # Data & Reproducible Pipeline
