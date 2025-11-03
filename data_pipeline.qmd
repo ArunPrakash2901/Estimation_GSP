@@ -1,0 +1,27 @@
+---
+title: "Workflow pipeline"
+format: html
+editor: visual
+---
+
+A good analysis report should be well-organised, reproducible, and simple to understand. This can be achieved by using the `targets` library, to create our workflow for nowcasting GSP(Gross state-wise product).
+
+We load the necessary libraries:
+
+```{r}
+library(tidyverse)
+library(targets)
+```
+
+To view and understand what our target workflow gives out, or the objects it creates, use `tar_manifest()`. This list out the objects that are going to be created and also one can get an idea of the structure and process-flow happening in the project.
+
+```{r}
+tar_manifest(script = "_targets_DataSourcing.R")
+```
+
+```{r}
+Sys.setenv(R_READABS_PATH = "D:/GSP/data/temp")
+tar_make(script = "_targets_DataSourcing.R")
+```
+
+
