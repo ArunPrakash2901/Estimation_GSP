@@ -1,0 +1,6 @@
+Metric,Value,Target
+80% PPC coverage,0.744,~0.75--0.85
+"corr(center, obs)",0.674,>= 0.70
+RMSE (std units),0.786,—
+b_nat_tilde 90% CI,"[0.133, 0.276] | median=0.196",> 0
+spectral radius,"median=0.969, p95=0.970",>= 0.97
