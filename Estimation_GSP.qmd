@@ -1,0 +1,252 @@
+---
+title: "Improving Nowcasting of Gross State Product(GSP)"
+subtitle: "Data-Sourcing"
+author: Arun Krishnasamy
+date: today
+toc: true
+execute:
+  message: false
+  warning: false
+  cache: false
+format:
+  presentation-beamer: default
+  presentation-revealjs+letterbox: default
+
+  
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+options(tidyverse.quiet = TRUE)
+
+suppressPackageStartupMessages({
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(targets)
+library(tarchetypes)
+library(readabs)
+library(readrba)
+library(conflicted)
+})
+options(warn.conflicts = FALSE)
+
+# Quiet conflicted
+conflicted::conflicts_prefer(dplyr::filter, dplyr::lag, .quiet = TRUE)
+
+Sys.setenv(R_READABS_PATH = "D:/GSP")
+
+
+tar_config_set(script = "_targets_DataSourcing.R")
+```
+# Introduction
+
+## What is GSP?
+
+- Gross State Product (GSP) is the value of goods and services produced within a state.
+
+- State-level counterpart to national GDP and shows each state’s contribution to Australia’s growth.
+
+- GSP guides budgets, infrastructure planning, jobs policy, and industry strategy.
+
+Today’s talk focuses on the data we rely on for robust GSP analysis: what we source and how we ingest it.
+
+# Existing Methodology
+
+## GSP Forecasting Framework
+
+::: {.shrink style="font-size:65%; line-height:1.15"}
+**Identity (real, chain-volume)**
+$$
+\text{RGSP}_t
+= C_t + I^{\text{dwell}}_t + \text{OTC}_t + I^{\text{bus}}_t + G_t + NX_t + \text{Bal}_t
+$$
+$$
+\begin{aligned}
+C_t &:\ \text{household consumption} \\
+I^{\mathrm{dwell}}_t &:\ \text{dwelling investment} \\
+\mathrm{OTC}_t &:\ \text{ownership transfer costs} \\
+I^{\mathrm{bus}}_t &:\ \text{business investment} \\
+G_t &:\ \text{government expenditure} \\
+NX_t &:\ \text{net international trade (exports - imports)} \\
+\mathrm{Bal}_t &:\ \text{balancing term}
+\end{aligned}
+$$
+**Common anchor (long-run growth)**
+
+$$
+g^{\text{trend}}_{\text{RGSP},t}
+\approx g_{\text{pop},t} + \Delta \text{part}_t + g_{\text{prod},t}
+$$
+:::
+
+# Problem
+
+<div style="text-align:center;">
+
+$\Sigma$**GSP ≠ GDP**  
+![ADHD strategies chart](images/image-1.webp){width=65%}
+
+</div>
+
+# Data
+
+## Pipeline Blueprint
+Define scope => Fetch signals => Assemble dataset => Data to model
+```{r, fig.align='center', fig.height=6, fig.width=10}
+tar_visnetwork()
+```
+
+## Series Selection
+
+- National GDP anchor; quarterly aligned  
+- Eight state SFD activity as proxies  
+- Four exogenous price–policy indicators  
+
+::: notes
+**National GDP (anchor):** Quarterly national GDP provides the headline target and consistency check against summed state activity.
+
+**State SFD (8 series):** NSW–ACT SFDs serve as state-level real activity signals that drive cross-state dynamics in the VAR.
+
+**Exogenous indicators (4):** Cash rate, trimmed-mean CPI, TWI, and commodity price index capture policy stance, inflation trend, external competitiveness, and terms-of-trade.
+
+**Annual GSP shares (weights):** State shares of national GSP (current prices), lagged one year, are reindexed to quarters and used for aggregation/reconciliation.
+
+**Schema discipline:** Frequencies and transforms (level/log/Δlog) are applied exactly as declared; monthlies are quarterised; everything moved to `Q-JUN` PeriodIndex.
+
+**Unified index & outputs:** Intersected quarters across all required series yield a common timeline; exported arrays/masks follow a fixed exogenous order for the model.
+:::
+
+
+# Modelling (in-progress)
+## State equation (VAR):
+::: {.shrink style="font-size:85%; line-height:1.15"}
+$$
+\mathbf{g}_t
+= \boldsymbol{\alpha}
++ \sum_{\ell=1}^{p}\Phi_{\ell}\,\mathbf{g}_{t-\ell}
++ B\,\mathbf{x}_t
++ \boldsymbol{\sigma}_t \odot \boldsymbol{\eta}_t,
+\qquad
+\boldsymbol{\eta}_t \sim \mathcal N(\mathbf{0}, I_N)
+$$
+
+$$
+\begin{aligned}
+\mathbf{g}_t &:\ \text{latent state vector }\\
+\boldsymbol{\alpha} &:\ \text{intercepts }\\
+\Phi_{\ell} &:\ \text{VAR lag matrices }\\
+B &:\ \text{exogenous coefficient matrix }\\
+\mathbf{x}_t &:\ \text{exogenous inputs }\\
+\boldsymbol{\sigma}_t &:\ \text{per-equation s.d. }\\
+\boldsymbol{\eta}_t &:\ \text{i.i.d. standard normal shocks }\\ 
+I_N &:\ \text{identity matrix of size } N
+\end{aligned}
+$$
+:::
+
+## Stochastic volatility (SV)
+
+::: {.shrink style="font-size:82%; line-height:1.2"}
+$$
+\boldsymbol{\sigma}_t=\exp\!\big(\tfrac12 \mathbf{h}_t\big), \qquad
+h_{i,t}=\mu_i+\phi_i\,(h_{i,t-1}-\mu_i)+\tau_i\,\varepsilon_{i,t},
+\qquad \varepsilon_{i,t}\sim \mathcal N(0,1)
+$$
+
+$$
+\begin{aligned}
+\mathbf{h}_t &:\ \text{log-volatility vector }\\
+\mu_i &:\ \text{long-run mean (per eq.) } \\
+\phi_i &:\ \text{persistence (AR coefficient) }\\
+\tau_i &:\ \text{volatility-of-volatility scale(size of the  shock) }\\
+\varepsilon_{i,t} &:\ \text{SV innovations }\\
+\boldsymbol{\sigma}_t &:\ \exp(\tfrac12 \mathbf{h}_t)
+\end{aligned}
+$$
+:::
+
+## Minnesota Prior (Shrinkage):
+::: {.shrink style="font-size:85%; line-height:1.15"}
+
+$$
+\Phi_{\ell,ij} \sim 
+\mathcal{N}\!\left(
+0,\;
+\frac{\kappa^2}{\ell^{2}}
+\times
+\begin{cases}
+\lambda_{\text{own}}^2, & i = j\\[4pt]
+\lambda_{\text{cross}}^2, & i \neq j
+\end{cases}
+\right)
+$$
+
+$$
+\begin{aligned}
+\Phi_{\ell,ij} &:\ \text{VAR lag coefficients}\\
+\lambda_{\text{own}} &:\ \text{own-lag std. deviation }\\
+\lambda_{\text{cross}} &:\ \text{cross-lag std.deviation (}\\
+\kappa &:\ \text{global tightness, decays as } 1/\ell^{\gamma}\\
+\gamma &:\ \text{lag decay parameter}\\
+\Phi_\ell &:\ \text{shrunken lag matrix at lag } \ell
+\end{aligned}
+$$
+
+:::
+
+## Measurement equations
+
+::: {.shrink style="font-size:82%; line-height:1.2"}
+$$
+\begin{aligned}
+y^{\mathrm{nat}}_t &= \mathbf{W}_t^{\top}\mathbf{g}_t + e^{\mathrm{nat}}_t,
+& e^{\mathrm{nat}}_t &\sim \mathcal N(0,\sigma^2_{\mathrm{nat}}) \\
+y^{\mathrm{sfd}}_{j,t} &= a_j + b_j\, g_{j,t} + e^{\mathrm{sfd}}_{j,t},
+& e^{\mathrm{sfd}}_{j,t} &\sim \mathcal N(0,\sigma^2_{\mathrm{sfd},j})
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\mathbf{W}_t &:\ \text{state-share weights }\\
+y^{\mathrm{nat}}_t &:\ \text{national measurement } \\
+y^{\mathrm{sfd}}_{j,t} &:\ \text{SFD measurement (state } j\text{)} \\
+a_j,\, b_j &:\ \text{measurement bias }\\
+\sigma_{\mathrm{nat}},\,\sigma_{\mathrm{sfd},j} &:\ \text{obs. noise scales }
+\end{aligned}
+$$
+:::
+
+## Posterior predictive
+
+::: {.shrink style="font-size:82%; line-height:1.2"}
+$$
+\mathbf{g}_{t+1}
+= \boldsymbol{\alpha}
++ \sum_{\ell=1}^{p}\Phi_{\ell}\,\mathbf{g}_{t+1-\ell}
++ B\,\mathbf{x}_{t+1}
++ \boldsymbol{\sigma}_{t+1} \odot \boldsymbol{\eta}_{t+1}
+$$
+
+$$
+\begin{aligned}
+\mathbf{g}_{t+1} &:\ \text{next latent state (nowcast)} \\
+\mathbf{x}_{t+1} &:\ \text{known/forecast exogenous inputs} \\
+\boldsymbol{\sigma}_{t+1},\,\boldsymbol{\eta}_{t+1} &:\ \text{SV-scaled innovations at } t{+}1
+\end{aligned}
+$$
+:::
+
+## Issues
+
+**MCMC sampler instability**: Highly collinear data pairs causing Cholesky decomposition failure, followed by matrix out of bound errors.
+
+
+**Heuristic for missing values**: Assigning coordinate indices to NaN entries in PyMC allows the model to identify
+
+::: notes
+The sampler tries a Cholesky factorization to draw samples from multivariate normals. If a covariance/info matrix isn’t strictly positive-definite, Cholesky is the first thing to fail. After that, downstream steps can receive NaNs or mismatched shapes, triggering dimension/bounds errors. When I inspected the feature matrix **after lag expansion**, I found near-duplicate columns → **multicollinearity**.
+:::
+
+# Q&A
